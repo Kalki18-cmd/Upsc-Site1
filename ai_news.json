@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "title": "Waiting for AI generator...",
+    "source": "System",
+    "categories": ["General"],
+    "tags": ["UPSC"],
+    "summary": {
+      "why_in_news": "File will update automatically via GitHub Actions daily.",
+      "key_facts": "-",
+      "prelims_pointers": "-",
+      "mains_angle": "-"
+    }
+  }
+]
