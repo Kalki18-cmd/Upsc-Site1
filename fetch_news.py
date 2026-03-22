@@ -1,99 +1,80 @@
-# fetch_news.py
-# Generates news.json from PIB RSS for a static site (no Firebase).
-# Run locally: python fetch_news.py
-# GitHub Actions will run this daily at 06:00 IST.
+import os, json, re, hashlib, requests, feedparser
 
-import json
-import re
-import hashlib
-from datetime import datetime, timezone
-from typing import List, Dict
-import feedparser
+HUGGINGFACE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+TOKEN = os.getenv("HUGGINGFACE_TOKEN")
+SITE_DIR = os.getenv("SITE_DIR", ".")
+OUT_PATH = os.path.join(SITE_DIR, "ai_news.json")
 
-FEEDS = [
-    {"name": "PIB", "url": "https://pib.gov.in/rss.aspx"},
-]
+FEED = "https://pib.gov.in/rss.aspx"
+MAX_ITEMS = 20
 
-CATEGORY_KEYWORDS = {
-    "Polity": [
-        "constitution", "article ", "parliament", "loksabha", "rajyasabha", "judiciary",
-        "supreme court", "high court", "bill", " act ", "amendment", "governor",
-        "president", "election commission",
-    ],
-    "Economy": [
-        "budget", "gdp", "inflation", "cpi", "wpi", "rbi", "monetary policy", "fiscal",
-        "tax", "gst", "msme", "fdi", "exports", "imports", "current account", "bank",
-    ],
-    "Environment": [
-        "climate", "pollution", "wildlife", "forest", "biodiversity", "emissions",
-        "carbon", "environment", "conservation", "ecology", "sustainable", "cop",
-    ],
-    "International Relations": [
-        "foreign minister", "bilateral", "summit", "treaty", "quad", "unsc", "diplomatic",
-        "embassy", "india-japan", "india-us", "india-france", "visit", "strategic",
-    ],
-}
+def clean(s):
+    if not s: return ""
+    s = re.sub(r"<[^>]+>", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
-MAX_ITEMS = 40  # limit for a lightweight page
+def stable_id(link, title):
+    return hashlib.sha1((link + title).encode()).hexdigest()[:12]
 
-def clean_text(s: str) -> str:
-    if not s:
-        return ""
-    s = re.sub(r"<[^>]+>", " ", s)  # strip HTML
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-def categorize(title: str, summary: str):
-    text = (title + " " + summary).lower()
-    matched = []
-    for cat, kws in CATEGORY_KEYWORDS.items():
-        for kw in kws:
-            if re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", text):
-                matched.append(cat)
-                break
-    return matched or ["General"]
-
-def make_id(link: str, title: str) -> str:
-    base = (link or "") + "|" + (title or "")
-    return hashlib.sha256(base.encode()).hexdigest()[:16]
-
-def fetch() -> List[Dict]:
-    items: List[Dict] = []
-    for f in FEEDS:
-        parsed = feedparser.parse(f["url"])
-        for e in parsed.entries:
-            title = clean_text(getattr(e, "title", ""))
-            if not title:
-                continue
-            summary = clean_text(getattr(e, "summary", ""))
-            link = getattr(e, "link", "")
-            pub = getattr(e, "published", "") or getattr(e, "updated", "")
-            cats = categorize(title, summary)
-            items.append({
-                "id": make_id(link, title),
-                "title": title,
-                "summary": summary,
-                "link": link,
-                "published": pub,
-                "source": f["name"],
-                "categories": cats
-            })
-    # Deduplicate and trim
-    seen = {}
-    for it in items:
-        seen[it["id"]] = it
-    out = list(seen.values())
-    # Sort newest first if date is present
-    def sort_key(x):
-        return x.get("published", "")
-    out.sort(key=sort_key, reverse=True)
-    return out[:MAX_ITEMS]
+def call_hf(prompt):
+    r = requests.post(
+        f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"inputs": prompt, "parameters": {"max_new_tokens": 400}}
+    )
+    r.raise_for_status()
+    txt = r.json()[0]["generated_text"]
+    # try to extract json
+    m = re.search(r"\{.*\}", txt, re.S)
+    if not m: raise ValueError("No JSON in HF output")
+    return json.loads(m.group(0))
 
 def main():
-    items = fetch()
-    with open("news.json", "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
-    print(f"Wrote {len(items)} items to news.json at", datetime.now(timezone.utc).isoformat())
+    feed = feedparser.parse(FEED)
+    out = []
+
+    for e in feed.entries[:MAX_ITEMS]:
+        title = clean(e.title)
+        summary = clean(e.summary)
+        link = e.link
+
+        prompt = f"""
+Write UPSC-ready JSON with keys:
+why_in_news, key_facts, prelims_pointers, mains_angle, tags
+
+News:
+TITLE: {title}
+SUMMARY: {summary}
+        """
+
+        try:
+            ai = call_hf(prompt)
+        except Exception as ex:
+            ai = {
+                "why_in_news": summary,
+                "key_facts": "",
+                "prelims_pointers": "",
+                "mains_angle": "",
+                "tags": []
+            }
+
+        out.append({
+            "id": stable_id(link, title),
+            "title": title,
+            "source": "PIB",
+            "categories": ["General"],
+            "tags": ai.get("tags", []),
+            "summary": {
+                "why_in_news": ai.get("why_in_news", ""),
+                "key_facts": ai.get("key_facts", ""),
+                "prelims_pointers": ai.get("prelims_pointers", ""),
+                "mains_angle": ai.get("mains_angle", "")
+            }
+        })
+
+    with open(OUT_PATH, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
     main()
+``
