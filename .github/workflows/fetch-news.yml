@@ -1,57 +1,80 @@
-name: Daily AI UPSC Briefs
+import os, json, re, hashlib, requests, feedparser
 
-on:
-  schedule:
-    - cron: '30 0 * * *'   # 06:00 IST (00:30 UTC)
-  workflow_dispatch:
+HUGGINGFACE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+TOKEN = os.getenv("HUGGINGFACE_TOKEN")
+SITE_DIR = os.getenv("SITE_DIR", ".")
+OUT_PATH = os.path.join(SITE_DIR, "ai_news.json")
 
-jobs:
-  ai-news:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+FEED = "https://pib.gov.in/rss.aspx"
+MAX_ITEMS = 20
 
-    env:
-      # >>>> CHANGE THIS LINE ONLY <<<<
-      SITE_DIR: docs    # set to '.' if your Pages uses root instead of /docs
-      AI_PROVIDER: openai        # openai | azure | hf | none
-      OPENAI_MODEL: gpt-4o-mini  # for OpenAI; cheap & good for summaries
-      MAX_ITEMS: '20'
+def clean(s):
+    if not s: return ""
+    s = re.sub(r"<[^>]+>", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5   # node22, removes deprecation warning
+def stable_id(link, title):
+    return hashlib.sha1((link + title).encode()).hexdigest()[:12]
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+def call_hf(prompt):
+    r = requests.post(
+        f"https://api-inference.huggingface.co/models/{HUGGINGFACE_MODEL}",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"inputs": prompt, "parameters": {"max_new_tokens": 400}}
+    )
+    r.raise_for_status()
+    txt = r.json()[0]["generated_text"]
+    # try to extract json
+    m = re.search(r"\{.*\}", txt, re.S)
+    if not m: raise ValueError("No JSON in HF output")
+    return json.loads(m.group(0))
 
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install feedparser requests
+def main():
+    feed = feedparser.parse(FEED)
+    out = []
 
-      - name: Build ai_news.json with AI
-        env:
-          SITE_DIR: ${{ env.SITE_DIR }}
-          AI_PROVIDER: ${{ env.AI_PROVIDER }}
-          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
-          MAX_ITEMS: ${{ env.MAX_ITEMS }}
-          # Secrets for AI providers (set at Repo → Settings → Secrets → Actions)
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
-          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
-          HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        run: |
-          python fetch_ai_news.py
+    for e in feed.entries[:MAX_ITEMS]:
+        title = clean(e.title)
+        summary = clean(e.summary)
+        link = e.link
 
-      - name: Commit & push if changed
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add $SITE_DIR/ai_news.json
-          git diff --quiet && echo "No changes" || git commit -m "AI update: $SITE_DIR/ai_news.json ($(date -u +'%Y-%m-%d %H:%M:%S UTC'))"
-          git push
+        prompt = f"""
+Write UPSC-ready JSON with keys:
+why_in_news, key_facts, prelims_pointers, mains_angle, tags
+
+News:
+TITLE: {title}
+SUMMARY: {summary}
+        """
+
+        try:
+            ai = call_hf(prompt)
+        except Exception as ex:
+            ai = {
+                "why_in_news": summary,
+                "key_facts": "",
+                "prelims_pointers": "",
+                "mains_angle": "",
+                "tags": []
+            }
+
+        out.append({
+            "id": stable_id(link, title),
+            "title": title,
+            "source": "PIB",
+            "categories": ["General"],
+            "tags": ai.get("tags", []),
+            "summary": {
+                "why_in_news": ai.get("why_in_news", ""),
+                "key_facts": ai.get("key_facts", ""),
+                "prelims_pointers": ai.get("prelims_pointers", ""),
+                "mains_angle": ai.get("mains_angle", "")
+            }
+        })
+
+    with open(OUT_PATH, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+
+if __name__ == "__main__":
+    main()
+``
