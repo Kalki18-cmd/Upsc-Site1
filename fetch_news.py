@@ -1,69 +1,99 @@
-import os, re, json, hashlib, feedparser, requests
-from datetime import datetime, timezone, timedelta
+# fetch_news.py
+# Generates news.json from PIB RSS for a static site (no Firebase).
+# Run locally: python fetch_news.py
+# GitHub Actions will run this daily at 06:00 IST.
 
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-MODEL = "gpt-4o-mini"   # adjustable
-RSS = "https://pib.gov.in/rss.aspx"
+import json
+import re
+import hashlib
+from datetime import datetime, timezone
+from typing import List, Dict
+import feedparser
 
-def clean(s):
-    s = re.sub(r"<[^>]+>", " ", s or "")
-    return re.sub(r"\s+", " ", s).strip()
+FEEDS = [
+    {"name": "PIB", "url": "https://pib.gov.in/rss.aspx"},
+]
 
-def prompt(title, summary):
-    return f"""
-Generate UPSC exam oriented notes in JSON with keys:
-why_in_news, key_facts, prelims_pointers, mains_angle, gs_paper, topic, tags.
-Make it crisp and factual.
+CATEGORY_KEYWORDS = {
+    "Polity": [
+        "constitution", "article ", "parliament", "loksabha", "rajyasabha", "judiciary",
+        "supreme court", "high court", "bill", " act ", "amendment", "governor",
+        "president", "election commission",
+    ],
+    "Economy": [
+        "budget", "gdp", "inflation", "cpi", "wpi", "rbi", "monetary policy", "fiscal",
+        "tax", "gst", "msme", "fdi", "exports", "imports", "current account", "bank",
+    ],
+    "Environment": [
+        "climate", "pollution", "wildlife", "forest", "biodiversity", "emissions",
+        "carbon", "environment", "conservation", "ecology", "sustainable", "cop",
+    ],
+    "International Relations": [
+        "foreign minister", "bilateral", "summit", "treaty", "quad", "unsc", "diplomatic",
+        "embassy", "india-japan", "india-us", "india-france", "visit", "strategic",
+    ],
+}
 
-Title: {title}
-Summary: {summary}
-"""
+MAX_ITEMS = 40  # limit for a lightweight page
 
-def ask_ai(p):
-    r = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {OPENAI_KEY}"},
-        json={
-            "model": MODEL,
-            "messages":[
-                {"role":"system","content":"UPSC mentor. Respond only in JSON."},
-                {"role":"user","content":p}
-            ],
-            "response_format":{"type":"json_object"},
-            "temperature":0.2
-        }
-    )
-    return json.loads(r.json()["choices"][0]["message"]["content"])
+def clean_text(s: str) -> str:
+    if not s:
+        return ""
+    s = re.sub(r"<[^>]+>", " ", s)  # strip HTML
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def categorize(title: str, summary: str):
+    text = (title + " " + summary).lower()
+    matched = []
+    for cat, kws in CATEGORY_KEYWORDS.items():
+        for kw in kws:
+            if re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", text):
+                matched.append(cat)
+                break
+    return matched or ["General"]
+
+def make_id(link: str, title: str) -> str:
+    base = (link or "") + "|" + (title or "")
+    return hashlib.sha256(base.encode()).hexdigest()[:16]
+
+def fetch() -> List[Dict]:
+    items: List[Dict] = []
+    for f in FEEDS:
+        parsed = feedparser.parse(f["url"])
+        for e in parsed.entries:
+            title = clean_text(getattr(e, "title", ""))
+            if not title:
+                continue
+            summary = clean_text(getattr(e, "summary", ""))
+            link = getattr(e, "link", "")
+            pub = getattr(e, "published", "") or getattr(e, "updated", "")
+            cats = categorize(title, summary)
+            items.append({
+                "id": make_id(link, title),
+                "title": title,
+                "summary": summary,
+                "link": link,
+                "published": pub,
+                "source": f["name"],
+                "categories": cats
+            })
+    # Deduplicate and trim
+    seen = {}
+    for it in items:
+        seen[it["id"]] = it
+    out = list(seen.values())
+    # Sort newest first if date is present
+    def sort_key(x):
+        return x.get("published", "")
+    out.sort(key=sort_key, reverse=True)
+    return out[:MAX_ITEMS]
 
 def main():
-    feed = feedparser.parse(RSS)
-    out = []
-    for e in feed.entries[:20]:
-        title = clean(e.title)
-        summary = clean(e.summary)
-        link = e.link
-        pub = e.published if hasattr(e,"published") else ""
-
-        ai = ask_ai(prompt(title, summary))
-
-        out.append({
-            "id": hashlib.md5((title+link).encode()).hexdigest(),
-            "title": title,
-            "source": "PIB",
-            "published": pub,
-            "summary": {
-                "why_in_news": ai.get("why_in_news",""),
-                "key_facts": ai.get("key_facts",""),
-                "prelims_pointers": ai.get("prelims_pointers",""),
-                "mains_angle": ai.get("mains_angle",""),
-            },
-            "gs_paper": ai.get("gs_paper",""),
-            "topic": ai.get("topic",""),
-            "tags": ai.get("tags",[])
-        })
-
-    with open("ai_news.json","w",encoding="utf-8") as f:
-        json.dump(out,f,ensure_ascii=False,indent=2)
+    items = fetch()
+    with open("news.json", "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+    print(f"Wrote {len(items)} items to news.json at", datetime.now(timezone.utc).isoformat())
 
 if __name__ == "__main__":
     main()
