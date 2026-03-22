@@ -1,42 +1,44 @@
-// 1) Show today's date
+// Show today's date
 (function () {
   const today = new Date();
-  const options = { year: 'numeric', month: 'long', day: 'numeric' };
-  const el = document.getElementById("date");
-  if (el) el.innerText = "Updated on: " + today.toLocaleDateString("en-IN", options);
+  const opts = { year: 'numeric', month: 'long', day: 'numeric' };
+  document.getElementById("date").innerText =
+    "Updated on: " + today.toLocaleDateString("en-IN", opts);
 })();
 
-// 2) Load local news.json and render cards
-(function () {
-  const container = document.getElementById("news");
-  if (!container) return;
+// Load the AI-generated JSON file
+fetch("./ai_news.json", { cache: "no-store" })
+  .then(r => r.json())
+  .then(items => {
+    const container = document.getElementById("news");
+    container.innerHTML = "";
 
-  fetch("./news.json", { cache: "no-store" })
-    .then(r => {
-      if (!r.ok) throw new Error(`news.json HTTP ${r.status}`);
-      return r.json();
-    })
-    .then(items => {
-      if (!Array.isArray(items) || items.length === 0) {
-        container.innerHTML = `<div class="news-item"><b>No news found</b><br>news.json is empty.</div>`;
-        return;
-      }
-      container.innerHTML = "";
-      items.forEach(item => {
-        const div = document.createElement("div");
-        div.className = "news-item";
-        const title = item.title ?? "";
-        const summary = item.summary ?? "";
-        const link = item.link ?? "";
-        div.innerHTML = link
-          ? `<b><a href="${link}" target="_blank" rel="noopener">${title}</a></b><br>${summary}`
-          : `<b>${title}</b><br>${summary}`;
-        container.appendChild(div);
-      });
-    })
-    .catch(err => {
-      console.error("Failed to load news.json:", err);
-      container.innerHTML =
-        `<div class="news-item"><b>Could not load news.json</b><br>${err.message}</div>`;
+    items.forEach(item => {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      card.innerHTML = `
+        <div class="title">${item.title}</div>
+        <div><b>Source:</b> ${item.source} • ${item.published}</div>
+
+        <div class="section-title">Why in News</div>
+        <div>${item.summary.why_in_news}</div>
+
+        <div class="section-title">Key Facts</div>
+        <div>${item.summary.key_facts}</div>
+
+        <div class="section-title">Prelims Pointers</div>
+        <div>${item.summary.prelims_pointers}</div>
+
+        <div class="section-title">Mains Angle</div>
+        <div>${item.summary.mains_angle}</div>
+
+        <div class="section-title">Tags</div>
+        <div>${item.tags.map(t => `<span class="tag">${t}</span>`).join(" ")}</div>
+      `;
+      container.appendChild(card);
     });
-})();
+  })
+  .catch(err => {
+    document.getElementById("news").innerHTML =
+      "<div class='card'>Error loading UPSC AI news: " +
