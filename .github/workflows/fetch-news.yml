@@ -1,37 +1,38 @@
-name: Daily: Build news.json (PIB)
+name: UPSC AI Daily Update
 
 on:
   schedule:
-    - cron: '30 0 * * *'   # 06:00 IST = 00:30 UTC
-  workflow_dispatch:       # allow manual run
+    - cron: '30 0 * * *'     # 06:00 IST
+  workflow_dispatch:
 
 jobs:
-  build-news:
+  ai-news:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # needed to push changes back to the repo
+      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
 
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install feedparser
+    - name: Install deps
+      run: |
+        python -m pip install --upgrade pip
+        pip install feedparser requests
 
-      - name: Generate news.json
-        run: |
-          python fetch_news.py
+    - name: Run AI script
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      run: |
+        python fetch_ai_news.py
 
-      - name: Commit & push if changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add news.json
-          git diff --quiet && echo "No changes" || git commit -m "Auto-update news.json $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          git push
+    - name: Commit updated ai_news.json
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add ai_news.json
+        git commit -m "AI UPSC Update $(date)" || echo "No changes"
+        git push
