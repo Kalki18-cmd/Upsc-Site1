@@ -1,25 +1,23 @@
-// Show today's date
-(function () {
-  const today = new Date();
-  const opts = { year: 'numeric', month: 'long', day: 'numeric' };
+(function showDate() {
+  const d = new Date();
   document.getElementById("date").innerText =
-    "Updated on: " + today.toLocaleDateString("en-IN", opts);
+    "Updated on: " + d.toLocaleDateString("en-IN", {
+      year: "numeric", month: "long", day: "numeric"
+    });
 })();
 
-// Load the AI-generated JSON file
 fetch("./ai_news.json", { cache: "no-store" })
   .then(r => r.json())
   .then(items => {
-    const container = document.getElementById("news");
-    container.innerHTML = "";
+    const div = document.getElementById("news");
 
     items.forEach(item => {
-      const card = document.createElement("div");
-      card.className = "card";
+      const c = document.createElement("div");
+      c.className = "card";
 
-      card.innerHTML = `
+      c.innerHTML = `
         <div class="title">${item.title}</div>
-        <div><b>Source:</b> ${item.source} • ${item.published}</div>
+        <div><b>Source:</b> ${item.source} • <b>Category:</b> ${item.categories.join(", ")}</div>
 
         <div class="section-title">Why in News</div>
         <div>${item.summary.why_in_news}</div>
@@ -34,11 +32,13 @@ fetch("./ai_news.json", { cache: "no-store" })
         <div>${item.summary.mains_angle}</div>
 
         <div class="section-title">Tags</div>
-        <div>${item.tags.map(t => `<span class="tag">${t}</span>`).join(" ")}</div>
+        <div class="tags">${item.tags.map(t => `<span>${t}</span>`).join("")}</div>
       `;
-      container.appendChild(card);
+      div.appendChild(c);
     });
   })
   .catch(err => {
+    console.error(err);
     document.getElementById("news").innerHTML =
-      "<div class='card'>Error loading UPSC AI news: " +
+      `<div class="card">Error loading data: ${err}</div>`;
+  });
